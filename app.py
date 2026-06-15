@@ -93,9 +93,10 @@ if 'PC1' not in df.columns:
     cols_v = [f'V{i}' for i in range(1, 29)]
     feats = [c for c in cols_v + ['Amount_scaled','Time_scaled'] if c in df.columns]
     if not feats:
-        feats = cols_v
+        # Se não tiver as colunas originais, faz PCA só com o que sobrou (numérico)
+        feats = df.select_dtypes(include=[np.number]).columns.tolist()
     pca = PCA(n_components=2, random_state=42)
-    coords = pca.fit_transform(df[feats].values)
+    coords = pca.fit_transform(df[feats].dropna().values)
     df['PC1'] = coords[:, 0]
     df['PC2'] = coords[:, 1]
 
@@ -203,9 +204,11 @@ with tab1:
             "desvios do padrão aprendido.")
 
     st.subheader("Amostra dos dados")
-    cols_show = ['Time','V1','V2','V3','Amount']
-    if 'Class' in df.columns:
-        cols_show.append('Class')
+    
+    # CORREÇÃO: Puxa dinamicamente as colunas que existem no CSV carregado
+    colunas_desejadas_tab1 = ['Time','V1','V2','V3','Amount', 'Class']
+    cols_show = [c for c in colunas_desejadas_tab1 if c in df.columns]
+    
     st.dataframe(df[cols_show].head(10).round(4), use_container_width=True)
 
 # ══════════════════════════════════════════════════════════════
@@ -241,14 +244,19 @@ with tab2:
     st.subheader("Dispersão Temporal")
     # Amostra para não travar o browser com 280k pontos
     sample_norm = norm_filt.sample(min(5000, len(norm_filt)), random_state=42)
-    fig2, ax2 = plt.subplots(figsize=(13, 4))
-    ax2.scatter(sample_norm['Time'], sample_norm['Amount'],
-                alpha=0.2, s=5, color='steelblue', label=f'Normal (amostra)')
-    ax2.scatter(anom_filt['Time'],  anom_filt['Amount'],
-                alpha=0.8, s=20, color='tomato',    label=f'Anômalo ({len(anom_filt):,})', zorder=5)
-    ax2.set_xlabel("Tempo (segundos)"); ax2.set_ylabel("Valor (€)")
-    ax2.set_title("Transações ao Longo do Tempo"); ax2.legend(markerscale=3)
-    plt.tight_layout(); st.pyplot(fig2); plt.close()
+    
+    # Verifica se a coluna 'Time' existe antes de montar o gráfico de tempo
+    if 'Time' in df.columns:
+        fig2, ax2 = plt.subplots(figsize=(13, 4))
+        ax2.scatter(sample_norm['Time'], sample_norm['Amount'],
+                    alpha=0.2, s=5, color='steelblue', label=f'Normal (amostra)')
+        ax2.scatter(anom_filt['Time'],  anom_filt['Amount'],
+                    alpha=0.8, s=20, color='tomato',    label=f'Anômalo ({len(anom_filt):,})', zorder=5)
+        ax2.set_xlabel("Tempo (segundos)"); ax2.set_ylabel("Valor (€)")
+        ax2.set_title("Transações ao Longo do Tempo"); ax2.legend(markerscale=3)
+        plt.tight_layout(); st.pyplot(fig2); plt.close()
+    else:
+        st.info("Gráfico de dispersão temporal não gerado porque a coluna 'Time' não está no arquivo CSV.")
 
     # Features V1-V6 + Heatmap
     cl, cr = st.columns(2)
@@ -267,19 +275,29 @@ with tab2:
                 axes3[j].set_visible(False)
             plt.tight_layout(); st.pyplot(fig3); plt.close()
         else:
-            st.info("Features V1–V6 não disponíveis no CSV carregado.")
+            st.info("Features V1–V6 não disponíveis no CSV carregado para gerar a distribuição.")
     with cr:
         st.subheader("Heatmap de Correlação")
         feat_corr = [f for f in ['V1','V2','V3','V4','V5','V6','Amount'] if f in df.columns]
-        fig4, ax4 = plt.subplots(figsize=(7, 6))
-        sns.heatmap(df[feat_corr].corr(), annot=True, fmt='.2f', cmap='coolwarm',
-                    center=0, ax=ax4, linewidths=0.5, annot_kws={'size': 9})
-        ax4.set_title("Correlação entre Features")
-        plt.tight_layout(); st.pyplot(fig4); plt.close()
+        if feat_corr:
+            fig4, ax4 = plt.subplots(figsize=(7, 6))
+            sns.heatmap(df[feat_corr].corr(), annot=True, fmt='.2f', cmap='coolwarm',
+                        center=0, ax=ax4, linewidths=0.5, annot_kws={'size': 9})
+            ax4.set_title("Correlação entre Features")
+            plt.tight_layout(); st.pyplot(fig4); plt.close()
+        else:
+            st.info("Não há features suficientes para gerar o heatmap de correlação.")
 
     st.subheader("Estatísticas Descritivas")
-    st.dataframe(df[['Amount','V1','V2','V3','V4','V5']].describe().round(3),
-                 use_container_width=True)
+    
+    # CORREÇÃO: Filtra apenas as colunas que realmente existem antes do .describe()
+    colunas_desejadas_desc = ['Amount','V1','V2','V3','V4','V5']
+    cols_desc = [c for c in colunas_desejadas_desc if c in df.columns]
+    
+    if cols_desc:
+        st.dataframe(df[cols_desc].describe().round(3), use_container_width=True)
+    else:
+        st.warning("Colunas base para as estatísticas não encontradas no dataset.")
 
 # ══════════════════════════════════════════════════════════════
 # ABA 3 — ALGORITMO & MODELO
@@ -428,17 +446,24 @@ with tab4:
 
     st.subheader("📋 Tabela de Registros Anômalos")
     if len(anom_filt):
-        cols_tab = ['Amount', 'Time', 'V1', 'V2', 'V3', 'anomaly_score']
-        if 'Class' in anom_filt.columns:
-            cols_tab.append('Class')
+        # CORREÇÃO: Traz apenas as colunas que realmente existirem
+        colunas_desejadas_tab4 = ['Amount', 'Time', 'V1', 'V2', 'V3', 'anomaly_score', 'Class']
+        cols_tab = [c for c in colunas_desejadas_tab4 if c in anom_filt.columns]
+        
         tabela = anom_filt[cols_tab].copy().sort_values('anomaly_score').reset_index(drop=True)
-        tabela['Amount'] = tabela['Amount'].round(2)
-        tabela['anomaly_score'] = tabela['anomaly_score'].round(5)
+        
+        if 'Amount' in tabela.columns:
+            tabela['Amount'] = tabela['Amount'].round(2)
+        if 'anomaly_score' in tabela.columns:
+            tabela['anomaly_score'] = tabela['anomaly_score'].round(5)
+            
         rename = {'Amount':'Valor (€)', 'Time':'Tempo (s)',
                   'anomaly_score':'Anomaly Score', 'Class':'Fraude Real'}
         tabela = tabela.rename(columns=rename)
+        
         if 'Fraude Real' in tabela.columns:
             tabela['Fraude Real'] = tabela['Fraude Real'].map({0:'❌ Não', 1:'✅ Sim'})
+            
         st.dataframe(
             tabela.style.background_gradient(subset=['Anomaly Score'], cmap='RdYlGn'),
             use_container_width=True, height=420
