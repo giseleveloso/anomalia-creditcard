@@ -254,18 +254,23 @@ with tab2:
     cl, cr = st.columns(2)
     with cl:
         st.subheader("Distribuição V1–V6")
-        fig3, axes3 = plt.subplots(2, 3, figsize=(11, 6))
-        axes3 = axes3.flatten()
-        for i, feat in enumerate([f'V{j}' for j in range(1, 7)]):
-            axes3[i].hist(normais_total[feat],   bins=40, alpha=0.6, color='steelblue', density=True, label='Normal')
-            axes3[i].hist(anomalias_total[feat], bins=20, alpha=0.8, color='tomato',    density=True, label='Anômalo')
-            axes3[i].set_title(feat, fontsize=10)
-            if i == 0: axes3[i].legend(fontsize=8)
-        plt.tight_layout(); st.pyplot(fig3); plt.close()
-
+        feats_disp = [f for f in [f'V{j}' for j in range(1, 7)] if f in df.columns]
+        if feats_disp:
+            fig3, axes3 = plt.subplots(2, 3, figsize=(11, 6))
+            axes3 = axes3.flatten()
+            for i, feat in enumerate(feats_disp):
+                axes3[i].hist(normais_total[feat],   bins=40, alpha=0.6, color='steelblue', density=True, label='Normal')
+                axes3[i].hist(anomalias_total[feat], bins=20, alpha=0.8, color='tomato',    density=True, label='Anômalo')
+                axes3[i].set_title(feat, fontsize=10)
+                if i == 0: axes3[i].legend(fontsize=8)
+            for j in range(len(feats_disp), 6):
+                axes3[j].set_visible(False)
+            plt.tight_layout(); st.pyplot(fig3); plt.close()
+        else:
+            st.info("Features V1–V6 não disponíveis no CSV carregado.")
     with cr:
         st.subheader("Heatmap de Correlação")
-        feat_corr = ['V1','V2','V3','V4','V5','V6','Amount']
+        feat_corr = [f for f in ['V1','V2','V3','V4','V5','V6','Amount'] if f in df.columns]
         fig4, ax4 = plt.subplots(figsize=(7, 6))
         sns.heatmap(df[feat_corr].corr(), annot=True, fmt='.2f', cmap='coolwarm',
                     center=0, ax=ax4, linewidths=0.5, annot_kws={'size': 9})
