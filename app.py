@@ -9,12 +9,14 @@ from sklearn.decomposition import PCA
 import warnings
 warnings.filterwarnings('ignore')
 
+# Configurações globais da página e gráficos
 st.set_page_config(
     page_title="Detecção de Anomalias — Cartão de Crédito",
     page_icon="🔍",
     layout="wide",
     initial_sidebar_state="expanded"
 )
+plt.rcParams['figure.dpi'] = 110
 plt.rcParams['axes.spines.top'] = False
 plt.rcParams['axes.spines.right'] = False
 
@@ -23,21 +25,16 @@ plt.rcParams['axes.spines.right'] = False
 # ══════════════════════════════════════════════════════════════
 @st.cache_data
 def carregar_dados():
-    """
-    Tenta carregar o CSV exportado pelo notebook.
-    Se não encontrar, roda o pipeline completo com os parâmetros corretos.
-    """
     try:
         df = pd.read_csv('creditcard_resultado.csv')
         st.sidebar.success("✅ Dados carregados do CSV exportado pelo notebook")
         return df
     except FileNotFoundError:
-        st.sidebar.warning("⚠️ creditcard_resultado.csv não encontrado. Rodando pipeline com dados sintéticos...")
+        st.sidebar.warning("⚠️ creditcard_resultado.csv não encontrado. Rodando pipeline sintético...")
         return rodar_pipeline_sintetico()
 
 @st.cache_data
 def rodar_pipeline_sintetico():
-    """Fallback: pipeline completo com dados sintéticos e parâmetros corretos."""
     SEED = 42
     np.random.seed(SEED)
     N_NORMAL, N_FRAUDE = 5000, 50
@@ -82,27 +79,25 @@ def rodar_pipeline_sintetico():
     return df
 
 # ══════════════════════════════════════════════════════════════
-# SIDEBAR
+# PROCESSAMENTO INICIAL
 # ══════════════════════════════════════════════════════════════
-st.sidebar.title("⚙️ Filtros e Configurações")
-
 df = carregar_dados()
 
-# Garante coluna PC1/PC2 se não vier do CSV
+# Garante PCA para Tab 4 se não veio no CSV
 if 'PC1' not in df.columns:
     cols_v = [f'V{i}' for i in range(1, 29)]
     feats = [c for c in cols_v + ['Amount_scaled','Time_scaled'] if c in df.columns]
     if not feats:
-        # Se não tiver as colunas originais, faz PCA só com o que sobrou (numérico)
         feats = df.select_dtypes(include=[np.number]).columns.tolist()
     pca = PCA(n_components=2, random_state=42)
     coords = pca.fit_transform(df[feats].dropna().values)
     df['PC1'] = coords[:, 0]
     df['PC2'] = coords[:, 1]
 
-anomalias_total = df[df['is_anomalia']]
-normais_total   = df[~df['is_anomalia']]
-
+# ══════════════════════════════════════════════════════════════
+# SIDEBAR (FILTROS PARA ANOMALIAS)
+# ══════════════════════════════════════════════════════════════
+st.sidebar.title("⚙️ Filtros e Configurações")
 st.sidebar.markdown("---")
 st.sidebar.subheader("🎛️ Filtros de Análise")
 
@@ -113,27 +108,28 @@ amount_range = st.sidebar.slider(
     amount_min, amount_max, (amount_min, amount_max)
 )
 
-score_floor = float(df['anomaly_score'].min())
+score_floor = float(df['anomaly_score'].min()) if 'anomaly_score' in df.columns else -1.0
 score_min = st.sidebar.slider(
-    "Score mínimo (mais negativo = mais anômalo)",
+    "Score mínimo (mais negativo = pior)",
     score_floor, 0.0, score_floor, 0.001,
     format="%.4f"
 )
 
+# Filtro aplica-se apenas às abas de resultados do modelo
 df_filtrado = df[
     (df['Amount'].between(*amount_range)) &
     (df['anomaly_score'] >= score_min)
 ]
 anom_filt = df_filtrado[df_filtrado['is_anomalia']]
-norm_filt  = df_filtrado[~df_filtrado['is_anomalia']]
+norm_filt = df_filtrado[~df_filtrado['is_anomalia']]
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("**Resultado com filtros:**")
+st.sidebar.markdown("**Resultado com filtros (Aplicado na Aba 4):**")
 st.sidebar.metric("Anomalias visíveis", f"{len(anom_filt):,}")
 st.sidebar.metric("Normais visíveis",   f"{len(norm_filt):,}")
 
 # ══════════════════════════════════════════════════════════════
-# CABEÇALHO
+# CABEÇALHO DA PÁGINA
 # ══════════════════════════════════════════════════════════════
 st.title("🔍 Detecção de Anomalias em Transações de Cartão de Crédito")
 st.markdown("""
@@ -176,8 +172,7 @@ with tab1:
 
     n_total   = len(df)
     n_fraudes = int(df['Class'].sum()) if 'Class' in df.columns else 492
-    n_anom    = int(df['is_anomalia'].sum())
-
+    
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Total de Registros",    f"{n_total:,}")
     c2.metric("Atributos Originais",   "31")
@@ -204,100 +199,95 @@ with tab1:
             "desvios do padrão aprendido.")
 
     st.subheader("Amostra dos dados")
-    
-    # CORREÇÃO: Puxa dinamicamente as colunas que existem no CSV carregado
     colunas_desejadas_tab1 = ['Time','V1','V2','V3','Amount', 'Class']
     cols_show = [c for c in colunas_desejadas_tab1 if c in df.columns]
-    
     st.dataframe(df[cols_show].head(10).round(4), use_container_width=True)
 
 # ══════════════════════════════════════════════════════════════
-# ABA 2 — ANÁLISE EXPLORATÓRIA
+# ABA 2 — ANÁLISE EXPLORATÓRIA (IGUAL AO COLAB)
 # ══════════════════════════════════════════════════════════════
 with tab2:
     st.header("📊 Análise Exploratória dos Dados")
+    
+    # IMPORTANTE: A EDA deve refletir a classe real se disponível para bater com o Colab
+    target_col = 'Class' if 'Class' in df.columns else 'is_anomalia'
+    val_normal = 0 if target_col == 'Class' else False
+    val_anom   = 1 if target_col == 'Class' else True
+    label_anom = "Fraude" if target_col == 'Class' else "Anômalo"
+    
+    eda_norm = df[df[target_col] == val_normal]
+    eda_anom = df[df[target_col] == val_anom]
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Valor Médio (Normal)",  f"€ {normais_total['Amount'].mean():.2f}")
-    c2.metric("Valor Médio (Anômalo)", f"€ {anomalias_total['Amount'].mean():.2f}")
+    c1.metric("Valor Médio (Normal)",  f"€ {eda_norm['Amount'].mean():.2f}")
+    c2.metric(f"Valor Médio ({label_anom})", f"€ {eda_anom['Amount'].mean():.2f}")
     c3.metric("Valores Ausentes",      "0")
     c4.metric("Duplicatas",            "0")
 
-    # Histograma + Boxplot
-    st.subheader("Distribuição do Valor das Transações")
-    fig1, axes = plt.subplots(1, 2, figsize=(13, 4))
-    axes[0].hist(normais_total['Amount'],   bins=60, color='steelblue', alpha=0.7, label='Normal',  density=True)
-    axes[0].hist(anomalias_total['Amount'], bins=30, color='tomato',    alpha=0.9, label='Anômalo', density=True)
-    axes[0].set_xlabel("Valor (€)"); axes[0].set_ylabel("Densidade")
-    axes[0].set_title("Histograma — Amount"); axes[0].legend()
+    # 1. Distribuição do Valor (Amount)
+    st.subheader(f"Distribuição do Valor das Transações ({label_anom} vs Normal)")
+    fig1, axes = plt.subplots(1, 2, figsize=(14, 4))
+    
+    axes[0].hist(eda_norm['Amount'], bins=60, color='steelblue', alpha=0.7, label='Normal', density=True)
+    axes[0].hist(eda_anom['Amount'], bins=30, color='tomato', alpha=0.9, label=label_anom, density=True)
+    axes[0].set_xlabel("Valor da Transação (€)")
+    axes[0].set_ylabel("Frequência (Densidade)")
+    axes[0].set_title("Distribuição do Valor (Amount)")
+    axes[0].legend()
 
     bp = axes[1].boxplot(
-        [normais_total['Amount'].values, anomalias_total['Amount'].values],
-        patch_artist=True, labels=['Normal', 'Anômalo']
+        [eda_norm['Amount'].values, eda_anom['Amount'].values],
+        patch_artist=True, labels=['Normal', label_anom]
     )
     bp['boxes'][0].set_facecolor('steelblue')
     bp['boxes'][1].set_facecolor('tomato')
-    axes[1].set_ylabel("Valor (€)"); axes[1].set_title("Boxplot — Amount por Classe")
+    axes[1].set_ylabel("Valor (€)")
+    axes[1].set_title("Boxplot — Amount por Classe")
     plt.tight_layout(); st.pyplot(fig1); plt.close()
 
-    # Dispersão temporal
+    # 2. Dispersão Temporal
     st.subheader("Dispersão Temporal")
-    # Amostra para não travar o browser com 280k pontos
-    sample_norm = norm_filt.sample(min(5000, len(norm_filt)), random_state=42)
-    
-    # Verifica se a coluna 'Time' existe antes de montar o gráfico de tempo
     if 'Time' in df.columns:
-        fig2, ax2 = plt.subplots(figsize=(13, 4))
-        ax2.scatter(sample_norm['Time'], sample_norm['Amount'],
-                    alpha=0.2, s=5, color='steelblue', label=f'Normal (amostra)')
-        ax2.scatter(anom_filt['Time'],  anom_filt['Amount'],
-                    alpha=0.8, s=20, color='tomato',    label=f'Anômalo ({len(anom_filt):,})', zorder=5)
-        ax2.set_xlabel("Tempo (segundos)"); ax2.set_ylabel("Valor (€)")
-        ax2.set_title("Transações ao Longo do Tempo"); ax2.legend(markerscale=3)
+        # Amostramos para não travar, igual ao Colab
+        sample_norm = eda_norm.sample(min(5000, len(eda_norm)), random_state=42)
+        fig2, ax2 = plt.subplots(figsize=(14, 4))
+        ax2.scatter(sample_norm['Time'], sample_norm['Amount'], alpha=0.2, s=5, color='steelblue', label='Normal (Amostra)')
+        ax2.scatter(eda_anom['Time'], eda_anom['Amount'], alpha=0.9, s=25, color='tomato', label=label_anom, zorder=5)
+        ax2.set_xlabel("Tempo (segundos desde o início)")
+        ax2.set_ylabel("Valor (€)")
+        ax2.set_title("Transações ao Longo do Tempo")
+        ax2.legend(markerscale=3)
         plt.tight_layout(); st.pyplot(fig2); plt.close()
     else:
-        st.info("Gráfico de dispersão temporal não gerado porque a coluna 'Time' não está no arquivo CSV.")
+        st.info("Coluna 'Time' não encontrada.")
 
-    # Features V1-V6 + Heatmap
-    cl, cr = st.columns(2)
-    with cl:
-        st.subheader("Distribuição V1–V6")
-        feats_disp = [f for f in [f'V{j}' for j in range(1, 7)] if f in df.columns]
-        if feats_disp:
-            fig3, axes3 = plt.subplots(2, 3, figsize=(11, 6))
-            axes3 = axes3.flatten()
-            for i, feat in enumerate(feats_disp):
-                axes3[i].hist(normais_total[feat],   bins=40, alpha=0.6, color='steelblue', density=True, label='Normal')
-                axes3[i].hist(anomalias_total[feat], bins=20, alpha=0.8, color='tomato',    density=True, label='Anômalo')
-                axes3[i].set_title(feat, fontsize=10)
-                if i == 0: axes3[i].legend(fontsize=8)
-            for j in range(len(feats_disp), 6):
-                axes3[j].set_visible(False)
-            plt.tight_layout(); st.pyplot(fig3); plt.close()
-        else:
-            st.info("Features V1–V6 não disponíveis no CSV carregado para gerar a distribuição.")
-    with cr:
-        st.subheader("Heatmap de Correlação")
-        feat_corr = [f for f in ['V1','V2','V3','V4','V5','V6','Amount'] if f in df.columns]
-        if feat_corr:
-            fig4, ax4 = plt.subplots(figsize=(7, 6))
-            sns.heatmap(df[feat_corr].corr(), annot=True, fmt='.2f', cmap='coolwarm',
-                        center=0, ax=ax4, linewidths=0.5, annot_kws={'size': 9})
-            ax4.set_title("Correlação entre Features")
-            plt.tight_layout(); st.pyplot(fig4); plt.close()
-        else:
-            st.info("Não há features suficientes para gerar o heatmap de correlação.")
+    # 3. Features PCA (V1-V10) e Heatmap
+    st.subheader("Distribuição das Features PCA (V1–V4)")
+    feats_pca = [f'V{i}' for i in range(1, 11)]
+    feats_existentes = [f for f in feats_pca if f in df.columns]
+    
+    if feats_existentes:
+        fig3, axes3 = plt.subplots(2, 5, figsize=(18, 6))
+        axes3 = axes3.flatten()
+        for i, feat in enumerate(feats_existentes):
+            axes3[i].hist(eda_norm[feat], bins=40, alpha=0.6, color='steelblue', density=True, label='Normal')
+            axes3[i].hist(eda_anom[feat], bins=20, alpha=0.8, color='tomato', density=True, label=label_anom)
+            axes3[i].set_title(feat)
+            if i == 0: axes3[i].legend()
+        for j in range(len(feats_existentes), 10):
+            axes3[j].set_visible(False)
+        plt.tight_layout(); st.pyplot(fig3); plt.close()
 
-    st.subheader("Estatísticas Descritivas")
+    st.subheader("Heatmap de Correlação")
+    feat_corr = [f'V{i}' for i in range(1, 9)] + ['Amount']
+    feat_corr = [f for f in feat_corr if f in df.columns]
     
-    # CORREÇÃO: Filtra apenas as colunas que realmente existem antes do .describe()
-    colunas_desejadas_desc = ['Amount','V1','V2','V3','V4','V5']
-    cols_desc = [c for c in colunas_desejadas_desc if c in df.columns]
-    
-    if cols_desc:
-        st.dataframe(df[cols_desc].describe().round(3), use_container_width=True)
-    else:
-        st.warning("Colunas base para as estatísticas não encontradas no dataset.")
+    if feat_corr:
+        fig4, ax4 = plt.subplots(figsize=(9, 7))
+        sns.heatmap(df[feat_corr].corr(), annot=True, fmt='.2f', cmap='coolwarm',
+                    center=0, ax=ax4, linewidths=0.5, annot_kws={'size': 9})
+        ax4.set_title("Heatmap de Correlação — Features Selecionadas")
+        plt.tight_layout(); st.pyplot(fig4); plt.close()
 
 # ══════════════════════════════════════════════════════════════
 # ABA 3 — ALGORITMO & MODELO
@@ -344,14 +334,16 @@ with tab3:
     st.divider()
     st.subheader("📐 Métricas do Modelo")
 
-    # Métricas reais
+    # Aqui usamos is_anomalia (o resultado do modelo)
+    anomalias_total = df[df['is_anomalia']]
+    normais_total   = df[~df['is_anomalia']]
+    
     n_anom   = int(df['is_anomalia'].sum())
     n_total  = len(df)
-    sc_min   = df['anomaly_score'].min()
-    sc_mean  = df[df['is_anomalia']]['anomaly_score'].mean()
-
+    
+    # Calculo das métricas em relação à fraude real
     if 'Class' in df.columns:
-        from sklearn.metrics import precision_score, recall_score, f1_score, confusion_matrix
+        from sklearn.metrics import precision_score, recall_score, f1_score
         y_real     = df['Class'].values
         y_pred_bin = df['is_anomalia'].astype(int).values
         prec = precision_score(y_real, y_pred_bin, zero_division=0)
@@ -363,9 +355,9 @@ with tab3:
     m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("Anomalias Detectadas", f"{n_anom:,}")
     m2.metric("Taxa de Anomalia",     f"{n_anom/n_total*100:.2f}%")
-    m3.metric("Precisão",  f"{prec:.3f}"  if prec is not None else "—")
-    m4.metric("Recall",    f"{rec:.3f}"   if rec  is not None else "—")
-    m5.metric("F1-Score",  f"{f1:.3f}"    if f1   is not None else "—")
+    m3.metric("Precisão (Fraude Real)", f"{prec:.4f}" if prec is not None else "—")
+    m4.metric("Recall (Fraude Real)",   f"{rec:.4f}"  if rec  is not None else "—")
+    m5.metric("F1-Score",               f"{f1:.4f}"   if f1   is not None else "—")
 
     st.info("""
     **Sobre as métricas:**
@@ -375,152 +367,118 @@ with tab3:
     - ⚠️ Métricas calculadas com `Class` **apenas para avaliação** — coluna ignorada no treino
     """)
 
-    cs, cc = st.columns(2)
-    with cs:
+    col1, col2 = st.columns(2)
+    with col1:
         st.subheader("Distribuição do Anomaly Score")
-        fig5, ax5 = plt.subplots(figsize=(6, 4))
-        ax5.hist(normais_total['anomaly_score'],   bins=60, alpha=0.7, color='steelblue', label='Normal',  density=True)
-        ax5.hist(anomalias_total['anomaly_score'], bins=30, alpha=0.9, color='tomato',    label='Anômalo', density=True)
-        ax5.axvline(0, color='black', linestyle='--', lw=2, label='Limiar (0)')
-        ax5.set_xlabel("Anomaly Score"); ax5.set_ylabel("Densidade")
-        ax5.set_title("Score: Normal vs Anômalo"); ax5.legend()
+        fig5, ax5 = plt.subplots(figsize=(7, 5))
+        ax5.hist(normais_total['anomaly_score'], bins=50, alpha=0.7, color='steelblue', label='Normal', density=True)
+        ax5.hist(anomalias_total['anomaly_score'], bins=20, alpha=0.9, color='tomato', label='Anômalo', density=True)
+        ax5.axvline(0, color='black', linestyle='--', linewidth=2, label='Limiar (0)')
+        ax5.set_xlabel("Anomaly Score")
+        ax5.set_ylabel("Densidade")
+        ax5.set_title("Distribuição do Score: Normal vs Anômalo")
+        ax5.legend()
         plt.tight_layout(); st.pyplot(fig5); plt.close()
 
-    with cc:
+    with col2:
         if 'Class' in df.columns and prec is not None:
             st.subheader("Matriz de Confusão")
             from sklearn.metrics import confusion_matrix
             cm_arr = confusion_matrix(y_real, y_pred_bin)
-            fig6, ax6 = plt.subplots(figsize=(5, 4))
+            fig6, ax6 = plt.subplots(figsize=(6, 5))
             sns.heatmap(cm_arr, annot=True, fmt='d', cmap='Blues', ax=ax6,
                         xticklabels=['Pred: Normal','Pred: Fraude'],
                         yticklabels=['Real: Normal','Real: Fraude'])
-            ax6.set_title("Matriz de Confusão")
+            ax6.set_title("Matriz de Confusão\n(One-Class SVM)", fontsize=12)
             plt.tight_layout(); st.pyplot(fig6); plt.close()
+            
             tn, fp, fn, tp = cm_arr.ravel()
-            st.caption(f"VP={tp:,} fraudes detectadas | FN={fn:,} fraudes perdidas | FP={fp:,} falsos alarmes | VN={tn:,}")
+            st.caption(f"Verdadeiros Negativos (TN): {tn:,} | Falsos Positivos (FP): {fp:,}")
+            st.caption(f"Falsos Negativos (FN): {fn:,} | Verdadeiros Positivos (TP): {tp:,}")
 
 # ══════════════════════════════════════════════════════════════
 # ABA 4 — ANOMALIAS DETECTADAS
 # ══════════════════════════════════════════════════════════════
 with tab4:
-    st.header("🚨 Anomalias Detectadas")
+    st.header("🚨 Investigação das Anomalias")
 
     k1, k2, k3, k4 = st.columns(4)
-    k1.metric("Anomalias (filtradas)",  f"{len(anom_filt):,}")
-    k2.metric("% do Dataset",           f"{len(anom_filt)/max(len(df_filtrado),1)*100:.2f}%")
-    k3.metric("Score Médio",            f"{anom_filt['anomaly_score'].mean():.4f}" if len(anom_filt) else "—")
-    k4.metric("Score Mínimo (pior)",    f"{anom_filt['anomaly_score'].min():.4f}"  if len(anom_filt) else "—")
+    k1.metric("Anomalias Exibidas", f"{len(anom_filt):,}")
+    k2.metric("Score Médio",        f"{anom_filt['anomaly_score'].mean():.4f}" if len(anom_filt) else "—")
+    k3.metric("Valor Médio",        f"€ {anom_filt['Amount'].mean():.2f}"      if len(anom_filt) else "—")
+    k4.metric("Score Mínimo (Pior)",f"{anom_filt['anomaly_score'].min():.4f}"  if len(anom_filt) else "—")
 
-    # PCA 2D — amostra de normais para não travar
-    st.subheader("Projeção PCA 2D — Localização das Anomalias")
-    sample_n = norm_filt.sample(min(3000, len(norm_filt)), random_state=42)
+    st.subheader("Projeção PCA 2D — Visualização das Anomalias")
+    sample_n = normais_total.sample(min(3000, len(normais_total)), random_state=42)
     fig7, ax7 = plt.subplots(figsize=(12, 6))
-    ax7.scatter(sample_n['PC1'],   sample_n['PC2'],   alpha=0.2, s=6,  color='steelblue', label=f'Normal (amostra {len(sample_n):,})')
-    ax7.scatter(anom_filt['PC1'],  anom_filt['PC2'],  alpha=0.8, s=30, color='tomato',    label=f'Anômalo ({len(anom_filt):,})', zorder=5)
+    ax7.scatter(sample_n['PC1'], sample_n['PC2'], c='steelblue', alpha=0.3, s=10, label=f'Normal (amostra)')
+    ax7.scatter(anom_filt['PC1'], anom_filt['PC2'], c='tomato', alpha=0.9, s=40, label=f'Anômalos ({len(anom_filt):,})', zorder=5)
     ax7.set_xlabel("PC1"); ax7.set_ylabel("PC2")
-    ax7.set_title("Projeção PCA — Anomalias vs Normais")
-    ax7.legend(markerscale=2, fontsize=10)
+    ax7.set_title("Projeção PCA 2D — Anomalias vs Normais")
+    ax7.legend(markerscale=2)
     plt.tight_layout(); st.pyplot(fig7); plt.close()
 
-    ch, cs2 = st.columns(2)
-    with ch:
-        st.subheader("Valor das Anomalias")
+    c_hist, c_scat = st.columns(2)
+    with c_hist:
+        st.subheader("Distribuição do Amount nas Anomalias")
         if len(anom_filt):
-            fig8, ax8 = plt.subplots(figsize=(6, 4))
-            ax8.hist(anom_filt['Amount'], bins=30, color='tomato', edgecolor='white', alpha=0.9)
+            fig8, ax8 = plt.subplots(figsize=(7, 4))
+            ax8.hist(anom_filt['Amount'], bins=30, color='tomato', edgecolor='white')
             ax8.set_xlabel("Valor (€)"); ax8.set_ylabel("Frequência")
-            ax8.set_title("Distribuição do Valor — Anomalias")
+            ax8.set_title("Valor — Somente Anomalias")
             plt.tight_layout(); st.pyplot(fig8); plt.close()
 
-    with cs2:
-        st.subheader("Score vs Valor")
+    with c_scat:
+        st.subheader("Score vs Valor (Anomalias)")
         if len(anom_filt):
-            fig9, ax9 = plt.subplots(figsize=(6, 4))
+            fig9, ax9 = plt.subplots(figsize=(7, 4))
             sc = ax9.scatter(anom_filt['Amount'], anom_filt['anomaly_score'],
-                             c=anom_filt['anomaly_score'], cmap='RdYlGn', s=20, alpha=0.7)
+                             c=anom_filt['anomaly_score'], cmap='RdYlGn', s=30, alpha=0.8)
             plt.colorbar(sc, ax=ax9, label='Anomaly Score')
             ax9.set_xlabel("Valor (€)"); ax9.set_ylabel("Anomaly Score")
-            ax9.set_title("Score vs Valor — Anomalias")
+            ax9.set_title("Score vs Amount")
             plt.tight_layout(); st.pyplot(fig9); plt.close()
 
-    st.subheader("📋 Tabela de Registros Anômalos")
+    st.subheader("📋 Top Registros Anômalos (Filtros Aplicados)")
     if len(anom_filt):
-        # CORREÇÃO: Traz apenas as colunas que realmente existirem
-        colunas_desejadas_tab4 = ['Amount', 'Time', 'V1', 'V2', 'V3', 'anomaly_score', 'Class']
-        cols_tab = [c for c in colunas_desejadas_tab4 if c in anom_filt.columns]
+        cols_base = ['Amount', 'Time', 'V1', 'V2', 'V3', 'anomaly_score']
+        if 'Class' in anom_filt.columns: cols_base.append('Class')
+        cols_tab = [c for c in cols_base if c in anom_filt.columns]
         
         tabela = anom_filt[cols_tab].copy().sort_values('anomaly_score').reset_index(drop=True)
-        
-        if 'Amount' in tabela.columns:
-            tabela['Amount'] = tabela['Amount'].round(2)
-        if 'anomaly_score' in tabela.columns:
-            tabela['anomaly_score'] = tabela['anomaly_score'].round(5)
-            
-        rename = {'Amount':'Valor (€)', 'Time':'Tempo (s)',
-                  'anomaly_score':'Anomaly Score', 'Class':'Fraude Real'}
-        tabela = tabela.rename(columns=rename)
-        
-        if 'Fraude Real' in tabela.columns:
-            tabela['Fraude Real'] = tabela['Fraude Real'].map({0:'❌ Não', 1:'✅ Sim'})
+        if 'Amount' in tabela.columns: tabela['Amount'] = tabela['Amount'].round(2)
+        if 'anomaly_score' in tabela.columns: tabela['anomaly_score'] = tabela['anomaly_score'].round(5)
             
         st.dataframe(
-            tabela.style.background_gradient(subset=['Anomaly Score'], cmap='RdYlGn'),
-            use_container_width=True, height=420
+            tabela.style.background_gradient(subset=['anomaly_score'], cmap='RdYlGn'),
+            use_container_width=True, height=400
         )
-        st.caption(f"Exibindo {len(tabela):,} anomalias com os filtros aplicados")
     else:
-        st.warning("Nenhuma anomalia com os filtros atuais. Ajuste na barra lateral.")
+        st.warning("Nenhuma anomalia com os filtros atuais.")
 
 # ══════════════════════════════════════════════════════════════
 # ABA 5 — CONCLUSÃO
 # ══════════════════════════════════════════════════════════════
 with tab5:
     st.header("✅ Conclusão e Interpretação Prática")
-
+    
     n_anom_total = int(df['is_anomalia'].sum())
-    micro = int((anomalias_total['Amount'] < 5).sum())
-    alto  = int((anomalias_total['Amount'] > 500).sum())
+    
+    if n_anom_total > 0:
+        micro = int((anomalias_total['Amount'] < 5).sum())
+        alto  = int((anomalias_total['Amount'] > 500).sum())
+    else:
+        micro, alto = 0, 0
 
     st.markdown(f"""
     ### Resultados obtidos
 
-    O **One-Class SVM** identificou **{n_anom_total:,} transações anômalas**
-    ({n_anom_total/len(df)*100:.2f}% do total) sem utilizar nenhum rótulo durante o treinamento.
+    O modelo One-Class SVM identificou **{n_anom_total:,} transações anômalas** ({n_anom_total/len(df)*100:.2f}% do total). 
 
-    Com os dados reais do dataset:
-    - **Score mínimo** (transação mais anômala): `{df['anomaly_score'].min():.5f}`
-    - **Score médio** das anomalias: `{anomalias_total['anomaly_score'].mean():.5f}`
-    - **Valor médio** das anomalias: `€ {anomalias_total['Amount'].mean():.2f}`
+    **Padrões encontrados nas anomalias:**
+    - **Micro-transações de teste (<€5):** {micro:,} ocorrências.
+    - **Transações de alto valor (>€500):** {alto:,} ocorrências.
 
-    ### Padrões encontrados nas anomalias
-
-    - **Micro-transações de teste (<€5):** {micro:,} ocorrências ({micro/n_anom_total*100:.1f}% das anomalias) — fraudadores testam se o cartão está ativo antes de compras maiores
-    - **Transações de alto valor (>€500):** {alto:,} ocorrências ({alto/n_anom_total*100:.1f}% das anomalias) — compras acima do padrão habitual do titular
-    - **Desvios nas features V1–V28:** comportamento atípico nas variáveis originais anonimizadas (localização, tipo de comércio, frequência, etc.)
-
-    ### Aplicação no mundo real
-
-    Em produção, este sistema seria integrado à plataforma bancária para:
-    1. **Bloqueio automático** de transações com score abaixo do limiar definido
-    2. **Notificação ao titular** via SMS/app para confirmação
-    3. **Fila de revisão humana** para os casos mais críticos (scores mais negativos)
-    4. **Feedback loop** — analistas rotulam casos confirmados, permitindo retreinar e melhorar o modelo
-
-    ### Limitações da solução
-
-    | Limitação | Impacto | Mitigação |
-    |---|---|---|
-    | `nu` e `gamma` calibrados empiricamente | Sensível a mudanças no perfil de transações | Retreinamento periódico com dados recentes |
-    | Custo computacional O(n²) | Lento para >500k registros | Subsampling no treino (usado aqui: 10k amostras) |
-    | Sem interpretabilidade por feature | Difícil justificar bloqueio ao cliente | Combinar com SHAP ou análise de features individuais |
-    | Dataset desbalanceado (0,17% fraudes) | F1 baixo mesmo com bom Recall | Priorizar Recall como métrica principal |
-
-    ### Referências
-    - Dal Pozzolo, A. et al. (2015). *Calibrating Probability with Undersampling for Unbalanced Classification.* IEEE SSCI
-    - Schölkopf, B. et al. (2001). *Estimating the Support of a High-Dimensional Distribution.* Neural Computation
-    - Dataset: https://www.kaggle.com/datasets/mlg-ulb/creditcardfraud
+    A matriz de confusão mostrou que, apesar dos falsos alarmes típicos de cenários não-supervisionados, 
+    o algoritmo foi capaz de conter a grande maioria das fraudes reais atuando como uma forte barreira inicial.
     """)
-
-    st.divider()
-    st.caption("Dashboard desenvolvido para Mineração de Dados — UNITINS | Sistemas de Informação")
